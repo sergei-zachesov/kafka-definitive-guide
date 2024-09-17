@@ -6,12 +6,20 @@ group = 'ru.zachesov.lern'
 version = '1.0-SNAPSHOT'
 
 repositories {
+    mavenLocal()
     mavenCentral()
+    maven {
+        url "https://packages.confluent.io/maven"
+    }
 }
 
 dependencies {
     testImplementation platform('org.junit:junit-bom:5.10.0')
     testImplementation 'org.junit.jupiter:junit-jupiter'
+
+    implementation 'org.apache.kafka:kafka-clients:3.8.0'
+    implementation 'io.confluent:kafka-avro-serializer:7.7.0'
+    implementation 'org.json:json:20240303'
 }
 
 test {
