@@ -5,14 +5,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.CommonClientConfigs;
-import org.apache.kafka.clients.consumer.ConsumerConfig;
-import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.json.JSONObject;
 
+@Slf4j
 public class ConsumerMain {
 
   public static void main(String[] args) {
@@ -22,6 +21,7 @@ public class ConsumerMain {
     props.put(CommonClientConfigs.GROUP_ID_CONFIG, "CountryCounter");
     props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
     props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+    props.put(ConsumerConfig.FETCH_MIN_BYTES_CONFIG, 2);
 
     KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props);
     consumer.subscribe(List.of("customerCountries"));
@@ -42,6 +42,23 @@ public class ConsumerMain {
         JSONObject json = new JSONObject(custCountryMap);
         System.out.println(json);
       }
+
+      // Синхронная фиксация смещения после обработки всего пакета сообщений
+      try {
+        consumer.commitSync();
+      } catch (CommitFailedException e) {
+        log.error("commit failed", e);
+      }
+
+      // Асинхронная фиксация
+      consumer.commitAsync();
+
+      // Асинхронная фиксация с обратным вызовом
+      consumer.commitAsync(
+          (offsets, e) -> {
+            if (e != null) log.error("Commit failed for offsets {}", offsets, e);
+          });
+
     }
   }
 }

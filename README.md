@@ -345,7 +345,7 @@ NICs емкостью не менее 10 Гбайт.
 * мощности процессора
 * пропускной способности
 
-В настоящее время рекомендуется иметь не более 14к реплик на брокер и 1м реплик на кластер.
+В настоящее время рекомендуется иметь не более 14000 реплик партиций на брокер и 1 млн. реплик на кластер.
 
 ### Конфигурация брокеров
 
@@ -975,8 +975,8 @@ public class CountingProducerInterceptor implements ProducerInterceptor<Object, 
 * _Совместная перебалансировка_. Инкрементальная перебалансировка, включает в себя перебаланисровку небольшого
   подмножество разделов от одного потребителя к другому. Более долгая, но не прерывает работу.
 
-Потребители поддерживают членство в группе(активность) и принадлежность разделов за счет отправки координаторомо группы
-брокеру периодических контрольных сигналов.
+Потребители поддерживают членство в группе(активность) и принадлежность разделов за счет отправки координатору группы
+брокеров периодических контрольных сигналов.
 
 Если потребитель длительное время прекращает отправку контрольных сигналов, время его сеанса истекает, координатор
 группы признает его неработающим и инициирует перебалансировку.
@@ -1074,4 +1074,501 @@ class ConsumerMain {
 
 ## Настройка потребителей
 
+### fetch.min.bytes
 
+Минимальный объем данных, получаемых от брокера при извлечении записей. По умолчанию 1 байт. Если размер сообщений
+меньше, то брокер будет ждать ещё сообщения для отправки потребителю. Рекомендуется повышать значение, но с учетом
+повышения задержки с низкой пропускной способностью.
+
+### fetch.max.wait.ms
+
+Максимальное время ожидания, пока не наберется размер сообщение больше `fetch.min.bytes`. То есть либо передача
+сообщений пройдет по `fetch.min.bytes`, или `fetch.max.wait.ms`.
+
+### fetch.max.bytes
+
+Максимальное количество байтов, которые Kafka будет возвращать каждый раз, когда потребитель опрашивает брокер. Если
+первый пакет записи будет превышать этого размера при отправке, то в данной отправке параметр игнорируется.
+
+### max.poll.records
+
+Максимальное количество записей, возвращаемое по вызову `poll()`.
+
+### max.partition.fetch.bytes
+
+Максимальное число байтов, возвращаемых сервером из расчета на один раздел. Конфигурация сложная, рекомендуется
+использовать `max.poll.records`.
+
+### session.timeout.ms и heartbeat.interval.ms
+
+`session.timeout.ms` - время ожидания ответа контрольного сигнала от потребителя, после которого он будет считаться
+отключенным. `heartbeat.interval.ms` - частота отправки потребителем контрольных сигналов. Данные параметры желательно
+менять одновременно. При низком значении, возможно ранее выявить не работающий потребитель, но может привести к частой
+перебалансировке.
+
+### max.poll.interval.ms
+
+Время, в течение которого потребитель может обходиться без опроса(`poll()`), прежде чем будет признан мертвым.
+
+### default.api.timeout.ms
+
+Тайм-аут, который будет применяться ко всем вызовам API, не указанный явно.
+
+### request.timeout.ms
+
+Максимальное время, в течение которого потребитель будет ожидать ответа от брокера. При превышении, закроет соединение и
+попытается подключиться снова. Не рекомендуется уменьшать дефолтное значение.
+
+### auto.offset.reset
+
+Поведение потребителя при начале чтения партиции, для которого у него зафиксированное смещение отсутствует или стало
+некорректным.
+
+* `latest` - в отсутствие корректного смещения потребитель начинает читать самые свежие
+* `earliest` - начинает читать все данные из раздела с начала
+* `none` - возникает исключение при попытках пользования с недопустимым смещением
+
+### enable.auto.commit
+
+Будет ли потребитель фиксировать смещение автоматически.
+
+### partition.assignment.strategy
+
+Определяет, какие разделы к какому потребителю будут относиться
+
+* **Range (Диапазонная)**. Каждому потребителю присваиваются последовательные подмножества разделов из топиков, на
+  которые он подписан.
+* **RoundRobin (Циклическая)**. Все разделы от всех партиций подписанных топиков распределяются по потребителям
+  последовательно, один за другим.
+* **Sticky (Липкая)**. Первая цель: получить максимально сбалансированное назначение. Вторая: оставить как можно больше
+  назначений на месте.
+* **Cooperative Sticky (Совместная липкая)**. Такая же, как `Липкая`, но поддерживает совместные перебалансировки, при
+  которых потребители могут продолжать потреблять из разделов, которые не были переназначены.
+
+### client.id
+
+Используют брокеры для идентификации отправленных клиентом запросов. Применяются для логирования и для показателей, при
+задании квот.
+
+### client.rack
+
+По-умолчанию потребители получают сообщения от ведущей реплики каждой партиции. Реплики могут находится физически в
+разных местах. Данная настройка позволяет включить выборку из физически ближайшей реплики относительно потребителя.
+
+### group.instance.id
+
+Предоставление потребителю статического членства в группе.
+
+### receive.buffer.bytes и send.buffer.bytes
+
+Размер TCP-буферов отправки и получения, применяемых сокетами при записи и чтения. Рекомендуется повышать, когда клиенты
+взаимодействуют с брокерами из другого ЦОД.
+
+### offsets.retention.minutes
+
+Настройка брокера, влияет на потребителей. Последнее смещение храниться в Kafka, до тех пор пока есть активные члены
+группы. Если группа неактивна, то через время указанное в настройке смещение сбрасывается.
+
+## Фиксация и смещение
+
+Метод `poll()` возвращает ещё не прочитанные сообщения. Потребитель фиксирует последнее сообщение, которое успешно
+обработано из партиции. Это называется фиксацией смещения(offset commit).
+
+Потребитель отправляют сообщение в брокер, которое обновляет специальный топик `__consumer_offsets`, содержащий смещение
+для каждого раздела. После перебалансировки, новый потребитель будет знать с какого смещения было последнее чтение.
+
+### Автоматическая фиксация
+
+При активном `enable.auto.commit` потребитель каждые 5с (настраивается `auto.commit.interval.ms`) проверяет
+необходимость фиксации. Если есть такая необходимость, то при следующем вызове poll() будет фиксировать последнее
+смещение, возвращенное предыдущим вызовом.
+
+Автоматическая фиксация удобна, но она не позволяет управлять так, чтобы избежать дублирования в случае сбоев.
+
+### Фиксация текущего смещения
+
+При отключенном `enable.auto.commit` фиксация будет происходить при явном указании фиксации в коде.
+
+```java
+public class ConsumerMain {
+
+    public static void main(String[] args) {
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<>();
+
+        while (true) {
+            ConsumerRecords<String, String> records = consumer.poll(timeout);
+
+            for (ConsumerRecord<String, String> record : records) {
+                System.out.printf(
+                        "topic = %s, partition = %d, offset = %d, " + "customer = %s, country = %s\n",
+                        record.topic(), record.partition(), record.offset(), record.key(), record.value());
+            }
+
+            // Фиксация смещения после обработки всего пакета сообщений
+            try {
+                consumer.commitSync();
+            } catch (CommitFailedException e) {
+                log.error("commit failed", e);
+            }
+        }
+    }
+}
+
+```
+
+Важно не вызывать метод `commitSync()` до окончания обработки последней записи в пакете сообщения.
+
+### Асинхронная фиксация
+
+Минусы синхронной фиксации - приложение заблокировано, пока не придет ответ фиксации. При асинхронной такого минуса нет.
+
+Метод асинхронной фиксации: `commitAsync()`.
+
+Минус данного подхода, что `commitAsync()` не повторяет попытку фиксации. Причина: на момент получения `commitAsync()`
+ответа от сервера уже может быть успешно выполнена более поздняя фиксация.
+
+Также можно передать функцию обратного вызова применяемую при ответе брокера. Их часто используют для каналирования
+ошибок фиксации или их подсчета в виде показателей:
+
+```java
+public class ConsumerMain {
+
+    public static void main(String[] args) {
+
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props);
+
+        while (true) {
+            ConsumerRecords<String, String> records = consumer.poll(timeout);
+
+            for (ConsumerRecord<String, String> record : records) {
+                System.out.printf(
+                        "topic = %s, partition = %d, offset = %d, " + "customer = %s, country = %s\n",
+                        record.topic(), record.partition(), record.offset(), record.key(), record.value());
+            }
+
+            // Асинхронная фиксация с обратным вызовом
+            consumer.commitAsync(
+                    (offsets, e) -> {
+                        if (e != null) log.error("Commit failed for offsets {}", offsets, e);
+                    });
+        }
+    }
+}
+```
+
+Простой способ обеспечить правильный порядок при асинхронных повторах:
+
+1. Увеличивайте порядковый номер при каждой фиксации и вставьте его во время фиксации в обратный вызов `commitAsync()`.
+2. Когда будете готовы отправить повторный запрос, проверьте, равен ли порядковый номер фиксации в обратном вызове
+   переменной экземпляра.
+3. Если да, то более поздняя фиксация не выполнялась и можно спокойно пробовать отправить запрос
+   еще раз.
+4. Если же значение переменной экземпляра больше, не нужно пробовать повторно отправлять запрос, потому что уже был
+   сделан более поздний запрос на фиксацию.
+
+Пример из https://stackoverflow.com/a/53244658/17965846
+
+```java
+class ConsumerCommitAsync {
+
+    public static void main(String[] args) {
+        Properties props = new Properties();
+        KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props);
+
+        try {
+            AtomicInteger atomicInteger = new AtomicInteger(0);
+            while (true) {
+                ConsumerRecords<String, String> records = consumer.poll(5);
+                for (ConsumerRecord<String, String> record : records) {
+                    System.out.printf(
+                            "topic = %s, partition = %d, offset = %d, " + "customer = %s, country = %s\n",
+                            record.topic(), record.partition(), record.offset(), record.key(), record.value());
+                }
+
+                consumer.commitAsync(
+                        new OffsetCommitCallback() {
+                            private final int marker = atomicInteger.incrementAndGet();
+
+                            @Override
+                            public void onComplete(
+                                    Map<TopicPartition, OffsetAndMetadata> offsets, Exception exception) {
+                                if (exception != null) {
+                                    if (marker == atomicInteger.get()) consumer.commitAsync(this);
+                                } else {
+                                    // Can't try anymore
+                                }
+                            }
+                        });
+            }
+        } catch (WakeupException e) {
+            // ignore for shutdown
+        } finally {
+            consumer.commitSync(); // Block
+            consumer.close();
+            System.out.println("Closed consumer and we are done");
+        }
+    }
+}
+
+```
+
+### Сочетание асинхронной и синхронной фиксации
+
+Случайные сбои при фиксации - незначительная помеха, но если речь идет о последней фиксации перед закрытием потребителя
+или перебалансировкой, то лучше позаботится, чтобы он точно оказалась успешной. Для этого сочетают асинхронную и
+синхронную фиксацию:
+
+```java
+public class ConsumerCommitAsyncAndSync {
+    public static volatile boolean closing = false;
+
+    public static void main(String[] args) {
+        Properties props = new Properties();
+        props.put(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG, "broker1:9092,broker2:9092");
+        props.put(CommonClientConfigs.GROUP_ID_CONFIG, "CountryCounter");
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
+            Duration timeout = Duration.ofMillis(100);
+            while (!closing) {
+                ConsumerRecords<String, String> records = consumer.poll(timeout);
+                for (ConsumerRecord<String, String> record : records) {
+                    System.out.printf(
+                            "topic = %s, partition = %s, offset = %d, customer = %s, country = %s",
+                            record.topic(), record.partition(), record.offset(), record.key(), record.value());
+                }
+                consumer.commitAsync();
+            }
+            consumer.commitSync();
+        } catch (Exception e) {
+            log.error("Unexpected error", e);
+        }
+    }
+}
+
+```
+
+### Фиксация заданного смещения
+
+Если требуется выполнять фиксацию смещения раньше, чем после полного обработки пакетов. Возможно вызвать `commitAsync()`
+или `commitSync()` с конкретным оффсетом:
+
+```java
+public class ConsumerCommitCurrent {
+
+    public static void main(String[] args) {
+
+        Properties props = new Properties();
+        try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
+
+            Map<TopicPartition, OffsetAndMetadata> currentOffsets = new HashMap<>();
+            int count = 0;
+
+            Duration timeout = Duration.ofMillis(100);
+            while (true) {
+                ConsumerRecords<String, String> records = consumer.poll(timeout);
+                for (ConsumerRecord<String, String> record : records) {
+                    System.out.printf(
+                            "topic = %s, partition = %s, offset = %d, customer = %s, country = %s\n",
+                            record.topic(), record.partition(), record.offset(), record.key(), record.value());
+                    currentOffsets.put(
+                            new TopicPartition(record.topic(), record.partition()),
+                            new OffsetAndMetadata(record.offset() + 1, "no metadata"));
+                    if (count % 1000 == 0) consumer.commitAsync(currentOffsets, null);
+                    count++;
+                }
+            }
+        }
+    }
+}
+
+```
+
+## Прослушивание на предмет перебалансировки
+
+Во время смены принадлежности патриций потребителю, возможно задать необходимое поведение с помощью объекта
+`ConsumerRebalanceListener` передав его в метода `subscribe()`.
+
+У `ConsumerRebalanceListener` методы для реализации:
+
+1. `void onPartitionsRevoked(Collection<TopicPartition> partitions)` - вызывается после переназначения разделов
+   потребителю, но до того как он начнет получать сообщения.
+2. `void onPartitionsAssigned(Collection<TopicPartition> partitions)` - При безотлагательной перебалансировки вызывается
+   до начала преебалансировки и после того, как потребитель стал получать сообщения. При совместной перебалансировки -
+   вызывается в конце перебалансировке, только с тем подмножеством партиций, от которых потребитель должен отказаться.
+3. `void onPartitionsLost(Collection<TopicPartition> partitions)` - дефолтно делегирует методу `onPartitionsAssigned()`.
+   Вызывается только при использовании совместного алгоритма перебалансировки и только в исключительных случаях, когда
+   разделы были назначены другим потребителям без предварительного отзыва алгоритма перебалансировки.
+
+Если используется алгоритм совместной перебалансировки, есть следующие момент:
+
+* `onPartitionsAssigned()` будет вызываться при каждой перебалансироке, как способ уведомления. Если нет новых разделов,
+  вызывиться с пустой коллекцией.
+* `onPartitionsRevoked()` будет вызываться только в том случае, если потребитель отказался от прав владения разделом.
+* `onPartitionsLost()` будет вызываться в исключительных условиях перебалансироки, к моменту вызова в коллекции у
+  партиций будут новые владельцы.
+
+```java
+public class ConsumerMainRebalanceListener {
+
+    private static final KafkaConsumer<String, String> consumer = getConsumer();
+    private static final Map<TopicPartition, OffsetAndMetadata> currentOffsets = new HashMap<>();
+    private static final Duration timeout = Duration.ofMillis(100);
+
+    public static void main(String[] args) {
+
+        try {
+            consumer.subscribe(List.of("topic"), new HandleRebalance());
+            while (true) {
+                ConsumerRecords<String, String> records = consumer.poll(timeout);
+                for (ConsumerRecord<String, String> record : records) {
+                    System.out.printf(
+                            "topic = %s, partition = %s, offset = %d, customer = %s, country = %s\n",
+                            record.topic(), record.partition(), record.offset(), record.key(), record.value());
+                    currentOffsets.put(
+                            new TopicPartition(record.topic(), record.partition()),
+                            new OffsetAndMetadata(record.offset() + 1, null));
+                }
+                consumer.commitAsync(currentOffsets, null);
+            }
+        } catch (WakeupException e) {
+            // Игнорируем, поскольку закрываемся
+        } catch (Exception e) {
+            log.error("Unexpected error", e);
+        } finally {
+            try {
+                consumer.commitSync(currentOffsets);
+            } finally {
+                consumer.close();
+                System.out.println("Closed consumer and we are done");
+            }
+        }
+    }
+
+    private static class HandleRebalance implements ConsumerRebalanceListener {
+        public void onPartitionsAssigned(Collection<TopicPartition> partitions) {
+        }
+
+        public void onPartitionsRevoked(Collection<TopicPartition> partitions) {
+            System.out.println(
+                    "Lost partitions in rebalance. " + "Committing current offsets:" + currentOffsets);
+            consumer.commitSync(currentOffsets);
+        }
+    }
+}
+```
+
+## Получение записей с заданными смещениями
+
+Если необходимо получать конкретные смещения:
+
+* `seekToBeginning()` - начать с начала для топиков
+* `seekToEnd()` - начать с конца для топиков
+
+Установить текущее смещение для всех разделов:
+
+```java
+        long oneHourEarlier =
+                Instant.now().atZone(ZoneId.systemDefault()).minusHours(1).toEpochSecond();
+        Map<TopicPartition, Long> partitionTimestampMap =
+                consumer.assignment().stream().collect(Collectors.toMap(tp -> tp, tp -> oneHourEarlier));
+        Map<TopicPartition, OffsetAndTimestamp> offsetMap =
+                consumer.offsetsForTimes(partitionTimestampMap);
+        for (Map.Entry<TopicPartition, OffsetAndTimestamp> entry : offsetMap.entrySet()) {
+            consumer.seek(entry.getKey(), entry.getValue().offset());
+        }
+
+```
+
+## Выход из цикла
+
+Если требуется выключить потребителя и выйти немедленно из цикла опроса, может быть проблема длительного ожидания
+`poll()`. Для этого можно воспользоваться ещё одним потоком для вызова метода `wakeup()`, если цикл опроса в главном
+потоке можно воспользоваться `ShutdownHook`. Если `wakeup()` был вызван в момент, когда поток не ожидает опроса, то
+исключение `WakeupException` будет вызвано в следующем вызове `poll()`.
+
+```java
+    // Registering a shutdown hook so we can exit cleanly
+    Runtime.getRuntime()
+        .addShutdownHook(
+            new Thread(
+                () -> {
+                  System.out.println("Starting exit...");
+                  // Note that shutdownhook runs in a separate thread, so the only thing we can
+                  // safely do to a consumer is wake it up
+                  movingAvg.consumer.wakeup();
+                  try {
+                    mainThread.join();
+                  } catch (InterruptedException e) {
+                    e.printStackTrace();
+                  }
+                }));
+
+```
+
+Подробнее http://bit.ly/2u47e9A.
+
+## Десериализаторы
+
+Сериализатор применяемый при отправке сообщения, должен соответствовать десериализатору при получении. В этом плане
+реестр схем `AvroSerializer` гарантирует, все записываемые данные совместимы со схемой топика, а значит, их можно
+десериализовать с помощью соответствующего десериализатора и схемы.
+
+### Пользовательские сериализаторы
+
+Реализовывать пользовательские десериализаторы и сериализаторы не рекомендуется, оно приводит к сильному сцеплению
+производителей и потребителей. Лучше использовать формат `JSON`, `Trift`, `Protobuf` или `Avro`.
+
+### Использование десериализаци Avro в потребителе Kafka
+
+```java
+    Duration timeout = Duration.ofMillis(100);
+    Properties props = new Properties();
+    props.put("bootstrap.servers", "broker1:9092,broker2:9092");
+    props.put("group.id", "CountryCounter");
+    props.put("key.serializer", "org.apache.kafka.common.serialization.StringDeserializer");
+    props.put("value.serializer", "io.confluent.kafka.serializers.KafkaAvroDeserializer");
+    props.put("specific.avro.reader", "true");
+    props.put("schema.registry.url", schemaUrl);
+    String topic = "customerContacts";
+    KafkaConsumer<String, Customer> consumer = new KafkaConsumer<>(props);
+    consumer.subscribe(Collections.singletonList(topic));
+    System.out.println("Reading topic:" + topic);
+    while (true) {
+      ConsumerRecords<String, Customer> records = consumer.poll(timeout);
+      for (ConsumerRecord<String, Customer> record : records) {
+        System.out.println("Current customer name is: " + record.value().getName());
+      }
+      consumer.commitSync();
+    }
+
+```
+
+## Автономный потребитель: зачем и как использовать потребитель без группы
+
+Можно назначить конкретные разделы для чтения. Пользователям может или подписываться на топик и состоять в группе, или
+назначать себе разделы, но не то и другое одновременно.
+
+```java
+    Duration timeout = Duration.ofMillis(100);
+    List<PartitionInfo> partitionInfos = consumer.partitionsFor("topic");
+    List<TopicPartition> partitions = new ArrayList<>();
+    if (partitionInfos != null) {
+      for (PartitionInfo partition : partitionInfos)
+        partitions.add(new TopicPartition(partition.topic(), partition.partition()));
+      consumer.assign(partitions);
+      while (true) {
+        ConsumerRecords<String, String> records = consumer.poll(timeout);
+        for (ConsumerRecord<String, String> record : records) {
+          System.out.printf(
+              "topic = %s, partition = %s, offset = %d, customer = %s, country = %s\n",
+              record.topic(), record.partition(), record.offset(), record.key(), record.value());
+        }
+        consumer.commitSync();
+      }
+
+```
+
+В данном случае, если добавляются новые разделы в топик, то необходимо об этом позаботится самостоятельно: либо
+периодически обращаться к `consumer.partitionsFor()` или просто перезапуская приложение при добавлении разделов.
