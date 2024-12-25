@@ -1572,3 +1572,396 @@ public class ConsumerMainRebalanceListener {
 
 В данном случае, если добавляются новые разделы в топик, то необходимо об этом позаботится самостоятельно: либо
 периодически обращаться к `consumer.partitionsFor()` или просто перезапуская приложение при добавлении разделов.
+
+# Программное управление Apache Kafka
+
+Возникают ситуации, когда требуется реализовать пользовательское управление кластера Kafka, например, клиентское
+создание топика. Для этого предоставлен API `AdminClient`.
+
+## Обзор AdminClient
+
+### Асинхронный и в конечном итоге согласованный API
+
+`AdminClient` - асинхронный, каждый метод возвращает один или несколько `Future`. При этом они обернуты в `Result`,
+предоставляющий методы ожидания завершения операции и вспомогательные методы.
+
+Распространение метаданных к брокерам является асинхронным, возвращаемый `Future` считается завершенным, когда состояние
+контроллера полностью обновлено. На этом этапе не все брокеры могут быть осведомлены о новом состоянии.
+
+### Опции
+
+Каждый метод `AdminClient` принимает аргумент объекта `Options`, специфичный для метода. Единственная общая настройка
+`timeoutMs` - как долго клиент будет ждать ответ от кластера.
+
+### Плоская иерархия
+
+Все операции администратора реализуются в `KafkaAdminClient`, без иерархии. Это сделано, чтобы производит поиск нужного
+метода, только в одном классе.
+
+### Дополнительные примечания
+
+Все операции изменения состояния кластера обрабатываются контроллером. Операции, считывающие состояние кластера и
+описание, могут обрабатываться любым брокером и направляются наименее загруженному. Это может быть полезно в случае
+неожиданного поведения, например, операция занимает слишком много времени.
+
+## Жизненный цикл AdminClient: создание, настройка и закрытие
+
+Создание:
+
+```java
+    Properties props = new Properties();
+    props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, "localhost:9092");
+    AdminClient admin = AdminClient.create(props);
+
+    admin.close(Duration.ofSeconds(30));
+
+```
+
+Единственный обязательный параметр - список URL брокеров кластера. Требуется на проде указать не менее трех.
+
+При вызове метода `close` нужно учитывать, что некоторые операции `AdminClient` в процессе выполнения. Если указать
+тайм-аут, то будет ожидание выполнения заданное время, если нет - то будет ожидать пока все операции не завершаться.
+
+### client.dns.lookup
+
+По умолчанию Kafka создает соединение на основе имени хоста. Но не хватает два сценария:
+
+#### Использование псевдонима DNS
+
+Если есть несколько брокеров с указанием адреса как псевдонима. Чтобы не указывать их всех в конфигурации сервера, можно
+создать единый псевдоним `DNS`, который будет с ними сопоставляться. Это не удобно при использовании `SASL`. В этом
+сценарии лучше использовать `client.dns.lookup=resolve_canonical_bootstrap_servers_only`. При такой конфигурации клиент
+`израсходует` псевдоним `DNS`.
+
+#### DNS-имя с несколькими IP-адресами
+
+В современных сетевых архитектурах принято размещать все брокеры за прокси-сервером или балансировщиком нагрузки,
+особенно в `Kubernetes`. Очень часто указывается список IP-адресов, все из которых разрешаются для балансировщиков
+нагрузки, и все они направляют трафик на один и тот же брокер. `client.dns.lookup=use_all_dns_ips` рекомендуется
+использовать, чтобы клиент не упустил преимущества высокодоступного уровня балансировки нагрузки.
+
+### request.timeout.ms
+
+Время, которое приложение может потратить на ожидание ответа `AdminClient`. Сюда входит время на повторную попытку. По
+умолчанию 120с, можно уменьшить, но при этом использовать параметр тайм-аута в параметре метода `AdminClient`.
+
+## Управление основными топиками
+
+Распространенные сценарии - управление топиками(получение списка, описание, создание, удаление).
+
+Все топики в кластере:
+
+`ListTopicsResult listTopics = admin.listTopics()`
+
+`ListTopicsResult` является оберткой над коллекцией `Futures`.
+
+Получить список топиков, и если нет одного, то создать его:
+
+```java
+    DescribeTopicsResult demoTopic = admin.describeTopics(TOPIC_LIST);
+    try {
+      topicDescription = demoTopic.topicNameValues().get(TOPIC_NAME).get();
+      System.out.println("Description of demo topic:" + topicDescription);
+      if (topicDescription.partitions().size() != NUM_PARTITIONS) {
+        System.out.println("Topic has wrong number of partitions. Exiting.");
+        System.exit(-1);
+      }
+    } catch (ExecutionException | InterruptedException e) {
+      // exit early for almost all exceptions
+      if (!(e.getCause() instanceof UnknownTopicOrPartitionException)) {
+        e.printStackTrace();
+        throw e;
+      }
+      // if we are here, topic doesn't exist
+      System.out.println("Topic " + TOPIC_NAME + " does not exist. Going to create it now");
+      // Note that number of partitions and replicas is optional. If they are
+      // not specified, the defaults configured on the Kafka brokers will be used
+      CreateTopicsResult newTopic =
+          admin.createTopics(List.of(new NewTopic(TOPIC_NAME, NUM_PARTITIONS, REP_FACTOR)));
+      // Check that the topic was created correctly:
+      if (newTopic.numPartitions(TOPIC_NAME).get() != NUM_PARTITIONS) {
+        System.out.println("Topic has wrong number of partitions.");
+        System.exit(-1);
+      }
+    }
+```
+
+Удаление топиков:
+
+```java
+    admin.deleteTopics(TOPIC_LIST).all().get();
+    // Check that it is gone. Note that due to the async nature of deletes,
+    // it is possible that at this point the topic still exists
+    try {
+      topicDescription = demoTopic.topicNameValues().get(TOPIC_NAME).get();
+      System.out.println("Topic " + TOPIC_NAME + " is still around");
+    } catch (ExecutionException e) {
+      System.out.println("Topic " + TOPIC_NAME + " is gone");
+    }
+```
+
+Удаление топика в Kafka безвозвратный процесс - нужно быть осторожным.
+
+Операции администрирование выполняются не часто, поэтому приемлемо вызывать метод `get()` и ожидать его выполнения.
+Кроме тех сервисов, который будет обрабатывать большое количество административных запросов.
+
+Пример сервера с асинхронным ответом:
+
+```java
+
+    vertx
+        .createHttpServer()
+        .requestHandler(
+            request -> {
+              String topic = request.getParam("topic");
+              String timeout = request.getParam("timeout");
+              int timeoutMs = NumberUtils.toInt(timeout, 1000);
+              DescribeTopicsResult demoTopic =
+                  admin.describeTopics(
+                      List.of(topic), new DescribeTopicsOptions().timeoutMs(timeoutMs));
+              demoTopic
+                  .topicNameValues()
+                  .get(topic)
+                  .whenComplete(
+                      (topicDescription, throwable) -> {
+                        if (throwable != null) {
+                          var chunk =
+                              "Error trying to describe topic %s due to %s"
+                                  .formatted(topic, throwable.getMessage());
+                          request.response().end(chunk);
+                        } else {
+                          request.response().end(topicDescription.toString());
+                        }
+                      });
+            })
+        .listen(8080);
+
+```
+
+## Управление конфигурацией
+
+Управление конфигурацией осуществляется путем описания и обновления коллекций `ConfigResource`. Ресурсы: брокеры,
+регистраторы брокеров и топиков. Проверка и изменение конфигурации брокеров обычно выполняется инструментами, например
+`kafka-config.sh`, а топиков из приложений.
+
+Проверка, что топик сжат и действия по исправлению его конфигурации:
+
+```java
+
+    ConfigResource configResource = new ConfigResource(ConfigResource.Type.TOPIC, TOPIC_NAME);
+    DescribeConfigsResult configsResult = admin.describeConfigs(List.of(configResource));
+    Config configs = configsResult.all().get().get(configResource);
+    // print nondefault configs
+    configs.entries().stream().filter(entry -> !entry.isDefault()).forEach(System.out::println);
+    // Check if topic is compacted
+    ConfigEntry compaction =
+        new ConfigEntry(TopicConfig.CLEANUP_POLICY_CONFIG, TopicConfig.CLEANUP_POLICY_COMPACT);
+    if (!configs.entries().contains(compaction)) {
+      // if topic is not compacted, compact it
+      Collection<AlterConfigOp> configOp = new ArrayList<>();
+      configOp.add(new AlterConfigOp(compaction, AlterConfigOp.OpType.SET));
+      Map<ConfigResource, Collection<AlterConfigOp>> alterConf = new HashMap<>();
+      alterConf.put(configResource, configOp);
+      admin.incrementalAlterConfigs(alterConf).all().get();
+    } else {
+      System.out.println("Topic " + TOPIC_NAME + " is compacted topic");
+    }
+
+```
+
+## Управление группами потребителей
+
+### Изучение групп потребителей
+
+Список групп потребителей, возвращает только те группы, которые кластер вернул без ошибок:
+
+`admin.listConsumerGroups().valid().get().forEach(System.out::println)`
+
+Дополнительная информация о некоторых группах:
+
+`admin.describeConsumerGroups(CONSUMER_GRP_LIST).describedGroups().get(CONSUMER_GROUP).get()`
+
+Получение информации о зафиксированном смещении в группе, и насколько оно отстает от последних сообщений в журнале.
+
+```java
+
+    Map<TopicPartition, OffsetAndMetadata> offsets =
+        admin.listConsumerGroupOffsets(CONSUMER_GROUP).partitionsToOffsetAndMetadata().get();
+    Map<TopicPartition, OffsetSpec> requestLatestOffsets = new HashMap<>();
+    for (TopicPartition tp : offsets.keySet()) {
+      requestLatestOffsets.put(tp, OffsetSpec.latest());
+    }
+
+    Map<TopicPartition, ListOffsetsResult.ListOffsetsResultInfo> latestOffsets =
+        admin.listOffsets(requestLatestOffsets).all().get();
+    for (Map.Entry<TopicPartition, OffsetAndMetadata> e : offsets.entrySet()) {
+      String topic = e.getKey().topic();
+      int partition = e.getKey().partition();
+      long committedOffset = e.getValue().offset();
+      long latestOffset = latestOffsets.get(e.getKey()).offset();
+      
+      System.out.println(
+          "Consumer group "
+              + CONSUMER_GROUP
+              + " has committed offset "
+              + committedOffset
+              + " to topic "
+              + topic
+              + " partition "
+              + partition
+              + ". The latest offset in the partition is "
+              + latestOffset
+              + " so consumer group is "
+              + (latestOffset - committedOffset)
+              + " records behind");
+    }
+
+```
+
+### Модификация групп потребителей
+
+Наиболее полезная функция модификации групп потребителей - изменения смещения.
+
+Группы потребителей не получают обновлений при изменении смещений в топике смещений. Они читают смещения только тогда,
+когда потребителю назначается новый раздел, или при запуске. Чтобы предотвратить внесение изменений в смещения, о
+которых потребители не будут знать, Kafka не позволит изменять смещения, пока группа потребителй активна.
+
+Сброс смещения:
+
+```java
+
+    Map<TopicPartition, ListOffsetsResult.ListOffsetsResultInfo> earliestOffsets =
+        admin.listOffsets(requestEarliestOffsets).all().get();
+    Map<TopicPartition, OffsetAndMetadata> resetOffsets = new HashMap<>();
+    for (Map.Entry<TopicPartition, ListOffsetsResult.ListOffsetsResultInfo> e :
+        earliestOffsets.entrySet()) {
+      resetOffsets.put(e.getKey(), new OffsetAndMetadata(e.getValue().offset()));
+    }
+    try {
+      admin.alterConsumerGroupOffsets(CONSUMER_GROUP, resetOffsets).all().get();
+    } catch (ExecutionException e) {
+      System.out.println(
+          "Failed to update the offsets committed by group "
+              + CONSUMER_GROUP
+              + " with error "
+              + e.getMessage());
+      if (e.getCause() instanceof UnknownMemberIdException)
+        System.out.println("Check if consumer group is still active.");
+    }
+
+```
+
+Одно из распространенных причин сбоя `alterConsumerGroupOffsets` - до этого не остановленная группа потребителей.
+
+## Метаданные кластера
+
+Информации о кластере к которому подключились:
+
+```java
+
+    DescribeClusterResult cluster = admin.describeCluster();
+    System.out.println("Connected to cluster " + cluster.clusterId().get());
+    System.out.println("The brokers in the cluster are:");
+    cluster.nodes().get().forEach(node -> System.out.println(" * " + node));
+    System.out.println("The controller is: " + cluster.controller().get());
+
+```
+
+## Расширенные операции администратора
+
+Полезны во время инцидентов.
+
+### Добавление разделов в топик
+
+Обычно количество партиций задается во время создания топика. И не меняется со временем работы.
+
+Если, довольно редко, бывают случаи достижения предела пропускной способности, можно добавить партиции.
+
+```java
+
+    Map<String, NewPartitions> newPartitions = new HashMap<>();
+    newPartitions.put(TOPIC_NAME, NewPartitions.increaseTo(NUM_PARTITIONS + 2));
+    admin.createPartitions(newPartitions).all().get();
+
+```
+
+### Удаление записей из топика
+
+В Kafka правила хранения для топиков не были реализованы, чтобы гарантировать соблюдение законов конфиденциальности.
+Топик с хранением в течение 30 дней может хранить более старые данные.
+
+```java
+
+    Map<TopicPartition, ListOffsetsResult.ListOffsetsResultInfo> olderOffsets =
+        admin.listOffsets(requestOlderOffsets).all().get();
+    Map<TopicPartition, RecordsToDelete> recordsToDelete = new HashMap<>();
+    for (Map.Entry<TopicPartition, ListOffsetsResult.ListOffsetsResultInfo> e :
+        olderOffsets.entrySet())
+      recordsToDelete.put(e.getKey(), RecordsToDelete.beforeOffset(e.getValue().offset()));
+    admin.deleteRecords(recordsToDelete).all().get();
+
+```
+
+Полная очистка диска будет происходить асинхронно.
+
+### Выбор лидера
+
+Типы выбора лидера:
+
+* **Выборы предпочтительного лидера**. В каждом разделе есть реплика, которая назначается предпочтительным лидером.
+  Метод `electLeader()` инициирует процесс предпочтительного лидера.
+* **Выборы нечистого лидера**. Если ведущая реплика становиться недоступной, а другие реплики не имеют права становиться
+  ведущими, раздел остается без ведущей реплики и, следовательно, оказывается недоступным. С помощью метода
+  `electLeader()` может запустить процесс выбора лидера из реплик, которые в ином случае не имеют права стать им.
+
+Метод асинхронный.
+
+```java
+
+    Set<TopicPartition> electableTopics = new HashSet<>();
+    electableTopics.add(new TopicPartition(TOPIC_NAME, 0));
+    try {
+      admin.electLeaders(ElectionType.PREFERRED, electableTopics).all().get();
+    } catch (ExecutionException e) {
+      if (e.getCause() instanceof ElectionNotNeededException) {
+        System.out.println("All leaders are preferred already");
+      }
+    }
+
+```
+
+### Перераспределение реплик
+
+Метод `alterPartitionReassignments()` дает тонкий контроль над размещением каждой отдельной реплики для раздела.
+
+Топик с несколькими разделами с одной репликой каждый. После добавления нового брокера, используем для хранения
+некоторых
+реплик текущих разделов.
+
+```java
+
+    Map<TopicPartition, Optional<NewPartitionReassignment>> reassignment = new HashMap<>();
+    reassignment.put(
+        new TopicPartition(TOPIC_NAME, 0),
+        Optional.of(new NewPartitionReassignment(List.of(0, 1))));
+    reassignment.put(
+        new TopicPartition(TOPIC_NAME, 1), Optional.of(new NewPartitionReassignment(List.of(1))));
+    reassignment.put(
+        new TopicPartition(TOPIC_NAME, 2),
+        Optional.of(new NewPartitionReassignment(List.of(1, 0))));
+    reassignment.put(new TopicPartition(TOPIC_NAME, 3), Optional.empty());
+    admin.alterPartitionReassignments(reassignment).all().get();
+    DescribeTopicsResult demoTopic = admin.describeTopics(TOPIC_LIST);
+    TopicDescription topicDescription = demoTopic.topicNameValues().get(TOPIC_NAME).get();
+
+```
+
+## Тестирование
+
+Класс `MockAdminClient` можно инициализировать с любым количеством брокеров и использовать для тестирования, не запуская
+реальный кластер Kafka. `MockAdminClient` не является частью Kafka API и может изменен без предупреждения.
+
+Тестирование: обработка с помощью клиента администратора и использование его для создания топиков:
+
+# Внутреннее устройство Kafka
+

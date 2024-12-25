@@ -1,24 +1,18 @@
-package ru.zachesov.lern.cunsumer;
+package ru.zachesov.lern.consumer;
 
 import java.time.Duration;
+import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
-
-import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.CommonClientConfigs;
 import org.apache.kafka.clients.consumer.*;
 import org.apache.kafka.common.TopicPartition;
-import org.apache.kafka.common.errors.WakeupException;
 import org.apache.kafka.common.serialization.StringDeserializer;
 
-@Slf4j
-public class ConsumerCommitAsyncAndSync {
-
-  public static volatile boolean closing = false;
+public class ConsumerCommitCurrent {
 
   public static void main(String[] args) {
+
     Properties props = new Properties();
     props.put(CommonClientConfigs.BOOTSTRAP_SERVERS_CONFIG, "broker1:9092,broker2:9092");
     props.put(CommonClientConfigs.GROUP_ID_CONFIG, "CountryCounter");
@@ -26,19 +20,24 @@ public class ConsumerCommitAsyncAndSync {
     props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
 
     try (KafkaConsumer<String, String> consumer = new KafkaConsumer<>(props)) {
+
+      Map<TopicPartition, OffsetAndMetadata> currentOffsets = new HashMap<>();
+      int count = 0;
+
       Duration timeout = Duration.ofMillis(100);
-      while (!closing) {
+      while (true) {
         ConsumerRecords<String, String> records = consumer.poll(timeout);
         for (ConsumerRecord<String, String> record : records) {
           System.out.printf(
-              "topic = %s, partition = %s, offset = %d, customer = %s, country = %s",
+              "topic = %s, partition = %s, offset = %d, customer = %s, country = %s\n",
               record.topic(), record.partition(), record.offset(), record.key(), record.value());
+          currentOffsets.put(
+              new TopicPartition(record.topic(), record.partition()),
+              new OffsetAndMetadata(record.offset() + 1, "no metadata"));
+          if (count % 1000 == 0) consumer.commitAsync(currentOffsets, null);
+          count++;
         }
-        consumer.commitAsync();
       }
-      consumer.commitSync();
-    } catch (Exception e) {
-      log.error("Unexpected error", e);
     }
   }
 }

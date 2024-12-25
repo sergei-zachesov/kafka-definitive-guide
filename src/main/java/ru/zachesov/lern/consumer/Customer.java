@@ -1,4 +1,4 @@
-package ru.zachesov.lern.cunsumer;
+package ru.zachesov.lern.consumer;
 
 public class Customer {
   private int customerID;

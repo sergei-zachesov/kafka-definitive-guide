@@ -1,4 +1,4 @@
-package ru.zachesov.lern.cunsumer;
+package ru.zachesov.lern.consumer;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;

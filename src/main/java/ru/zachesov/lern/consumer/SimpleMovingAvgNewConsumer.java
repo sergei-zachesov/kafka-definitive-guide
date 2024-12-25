@@ -1,4 +1,4 @@
-package ru.zachesov.lern.cunsumer;
+package ru.zachesov.lern.consumer;
 
 import java.util.Collections;
 import java.util.Properties;
