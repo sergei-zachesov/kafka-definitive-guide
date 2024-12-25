@@ -1963,5 +1963,35 @@ public class ConsumerMainRebalanceListener {
 
 Тестирование: обработка с помощью клиента администратора и использование его для создания топиков:
 
+```java
+
+  @BeforeEach
+  public void setUp() {
+    Node broker = new Node(0, "localhost", 9092);
+
+    this.admin = spy(new MockAdminClient(List.of(broker), broker));
+    // without this, the tests will throw
+    // `java.lang.UnsupportedOperationException: Not implemented yet`
+    AlterConfigsResult emptyResult = mock(AlterConfigsResult.class);
+    doReturn(KafkaFuture.completedFuture(null)).when(emptyResult).all();
+    doReturn(emptyResult).when(admin).incrementalAlterConfigs(any());
+  }
+
+  @Test
+  public void createTestTopic() throws ExecutionException, InterruptedException {
+    TopicCreator tc = new TopicCreator(admin);
+    tc.maybeCreateTopic("test.is.a.test.topic");
+    verify(admin, times(1)).createTopics(any());
+  }
+
+  @Test
+  public void notTopic() throws ExecutionException, InterruptedException {
+    TopicCreator tc = new TopicCreator(admin);
+    tc.maybeCreateTopic("not.a.test");
+    verify(admin, never()).createTopics(any());
+  }
+
+```
+
 # Внутреннее устройство Kafka
 
